@@ -40,6 +40,7 @@ class BLEScannerApp:
 
         # 蓝牙状态
         self.ble_status = "未知"
+        self.previous_ble_status = "未知"  # 用于跟踪状态变化
         self.scanning = False
         self.scan_task = None
         self.devices_dict = {}  # 用于存储设备信息
@@ -98,10 +99,17 @@ class BLEScannerApp:
         top_frame = tk.Frame(self.root)
         top_frame.pack(fill=tk.X, padx=20, pady=10)
 
-        self.status_label = tk.Label(
-            top_frame, text="蓝牙状态: 未知", font=self.large_font
+        # 创建"蓝牙状态:"标签（永远是黑色）
+        self.prefix_label = tk.Label(
+            top_frame, text="蓝牙状态: ", font=self.default_font, foreground="black"
         )
-        self.status_label.pack(side=tk.LEFT)
+        self.prefix_label.pack(side=tk.LEFT)
+
+        # 创建状态文本标签（根据状态改变颜色）
+        self.status_text_label = tk.Label(
+            top_frame, text="未知", font=self.default_font, foreground="black"
+        )
+        self.status_text_label.pack(side=tk.LEFT)
 
         # 刷新按钮
         self.refresh_button = ttk.Button(
@@ -306,14 +314,28 @@ class BLEScannerApp:
                         return "蓝牙已启用"
                 except ImportError:
                     # 如果没有wmi，则假设蓝牙可用
-                    return "蓝牙已启用"
+                    pass
 
-            # 在其他平台上假设蓝牙可用
-            return "蓝牙已启用"
+            # 尝试扫描来验证蓝牙是否真的可用
+            try:
+                # 创建一个短暂的扫描来测试蓝牙是否可用
+                asyncio.run(self.test_bluetooth_connectivity())
+                return "蓝牙已启用"
+            except Exception:
+                return "蓝牙已禁用"
 
         except Exception as e:
             print(f"检查蓝牙状态时出错: {e}")
             return "蓝牙已禁用"
+
+    async def test_bluetooth_connectivity(self):
+        """
+        测试蓝牙连接性
+        """
+        scanner = BleakScanner()
+        await scanner.start()
+        await asyncio.sleep(1.0)  # 短暂扫描
+        await scanner.stop()
 
     def monitor_ble_status(self):
         """
@@ -321,29 +343,52 @@ class BLEScannerApp:
         """
         while self.monitoring:
             status = self.get_ble_status()
+
+            # 检查状态是否发生变化
             if status != self.ble_status:
+                self.previous_ble_status = self.ble_status
                 self.ble_status = status
+
                 # 在主线程中更新界面
                 self.root.after(0, self.update_status_display)
 
-            # 每5秒检查一次状态
-            time.sleep(5)
+                # 根据状态变化执行相应操作
+                if (
+                    self.previous_ble_status == "蓝牙已禁用"
+                    and self.ble_status == "蓝牙已启用"
+                ):
+                    # 从禁用变为启用时，开始一次扫描
+                    self.root.after(0, self.refresh_devices)
+                elif self.ble_status == "蓝牙已禁用":
+                    # 变为禁用状态时，清空列表
+                    self.root.after(0, self.clear_device_list)
+
+            # 每1秒检查一次状态
+            time.sleep(1)
+
+    def clear_device_list(self):
+        """清空设备列表"""
+        self.devices_dict.clear()
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        self.info_label.config(text="蓝牙已禁用，设备列表已清空")
 
     def update_status_display(self):
         """
         更新状态显示
         """
-        self.status_label.config(text=f"蓝牙状态: {self.ble_status}")
+        # 更新状态文本
+        self.status_text_label.config(text=self.ble_status)
 
-        # 根据状态改变颜色
+        # 根据状态设置颜色
         if self.ble_status == "不支持蓝牙":
-            self.status_label.config(foreground="red")
+            self.status_text_label.config(foreground="red")
         elif self.ble_status == "蓝牙已禁用":
-            self.status_label.config(foreground="orange")
+            self.status_text_label.config(foreground="red")
         elif self.ble_status == "蓝牙已启用":
-            self.status_label.config(foreground="green")
+            self.status_text_label.config(foreground="green")
         elif self.ble_status == "蓝牙已连接":
-            self.status_label.config(foreground="blue")
+            self.status_text_label.config(foreground="blue")
 
     def start_auto_scan(self):
         """
@@ -392,10 +437,27 @@ class BLEScannerApp:
             self.root.after(0, self.cleanup_missing_devices)
 
         except Exception as e:
-            error_msg = f"扫描设备时出错: {str(e)}"
-            print(error_msg)
-            self.root.after(0, lambda: self.info_label.config(text="扫描失败"))
-            messagebox.showerror("错误", error_msg)
+            # 检查是否是蓝牙未就绪错误
+            if "WinError" in str(e) and "设备未就绪" in str(e):
+                # 更新蓝牙状态为禁用，清空设备列表，但不弹窗
+                self.root.after(0, self.handle_bluetooth_disabled)
+            else:
+                # 其他错误仍然弹窗
+                error_msg = f"扫描设备时出错: {str(e)}"
+                print(error_msg)
+                self.root.after(0, lambda: self.info_label.config(text="扫描失败"))
+                # 只有非蓝牙未就绪的错误才弹窗
+                self.root.after(0, lambda: messagebox.showerror("错误", error_msg))
+
+    def handle_bluetooth_disabled(self):
+        """处理蓝牙被禁用的情况"""
+        # 更新蓝牙状态
+        self.previous_ble_status = self.ble_status
+        self.ble_status = "蓝牙已禁用"
+        self.update_status_display()
+
+        # 清空设备列表
+        self.clear_device_list()
 
     def cleanup_missing_devices(self):
         """清理当前扫描中未发现的设备"""
@@ -513,7 +575,13 @@ class BLEScannerApp:
             )
 
         except Exception as e:
-            raise e
+            # 检查是否是蓝牙未就绪错误
+            if "WinError" in str(e) and "设备未就绪" in str(e):
+                # 更新蓝牙状态为禁用，清空设备列表，但不抛出异常
+                self.root.after(0, self.handle_bluetooth_disabled)
+                return  # 直接返回，不抛出异常
+            else:
+                raise e  # 其他异常继续抛出
 
 
 def main():
