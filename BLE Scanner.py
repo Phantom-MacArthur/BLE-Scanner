@@ -1,10 +1,18 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, font
 import threading
 import platform
 import time
 import asyncio
 import sys
+
+# 设置高DPI适配
+try:
+    from ctypes import windll
+
+    windll.shcore.SetProcessDpiAwareness(1)
+except:
+    pass
 
 # 尝试导入bleak库
 try:
@@ -19,8 +27,16 @@ except ImportError:
 class BLEScannerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("蓝牙扫描工具")
-        self.root.geometry("700x550")
+        self.root.title("BLE Scanner")
+
+        # 设置字体
+        self.setup_fonts()
+
+        # 设置窗口大小
+        self.root.geometry("1400x1100")
+
+        # 设置缩放
+        self.root.tk.call("tk", "scaling", 2.0)
 
         # 蓝牙状态
         self.ble_status = "未知"
@@ -53,44 +69,83 @@ class BLEScannerApp:
         # 启动自动扫描循环
         self.start_auto_scan()
 
-    def create_widgets(self):
-        # 状态显示框架
-        status_frame = ttk.LabelFrame(self.root, text="蓝牙状态", padding=(10, 5))
-        status_frame.pack(fill=tk.X, padx=10, pady=5)
+    def setup_fonts(self):
+        """设置字体"""
+        # 定义字体优先级
+        font_preferences = ["苹方", "宋体", "微软雅黑"]
+        available_fonts = list(font.families())
 
-        self.status_label = ttk.Label(
-            status_frame, text="状态: 未知", font=("Arial", 12)
+        # 选择可用的最佳字体
+        selected_font = "Arial"  # 默认字体
+        for font_name in font_preferences:
+            if font_name in available_fonts:
+                selected_font = font_name
+                break
+
+        # 设置字体大小
+        self.default_font = (selected_font, 12)
+        self.title_font = (selected_font, 14, "bold")
+        self.large_font = (selected_font, 16)
+        self.tree_font = (selected_font, 12)
+        self.tree_heading_font = (selected_font, 12)  # 移除 bold 属性使字体一致
+        self.header_font = (selected_font, 12)
+
+        # 应用字体到默认UI元素
+        self.root.option_add("*Font", self.default_font)
+
+    def create_widgets(self):
+        # 顶部状态栏框架
+        top_frame = tk.Frame(self.root)
+        top_frame.pack(fill=tk.X, padx=20, pady=10)
+
+        self.status_label = tk.Label(
+            top_frame, text="蓝牙状态: 未知", font=self.large_font
         )
         self.status_label.pack(side=tk.LEFT)
 
         # 刷新按钮
         self.refresh_button = ttk.Button(
-            status_frame, text="刷新设备", command=self.refresh_devices
+            top_frame,
+            text="刷新设备",
+            command=self.refresh_devices,
+            style="Large.TButton",
         )
         self.refresh_button.pack(side=tk.RIGHT)
 
         # 筛选框架
-        filter_frame = ttk.LabelFrame(self.root, text="设备筛选", padding=(10, 5))
-        filter_frame.pack(fill=tk.X, padx=10, pady=5)
+        filter_frame = ttk.LabelFrame(self.root, text="设备筛选", padding=(20, 10))
+        filter_frame.pack(fill=tk.X, padx=20, pady=10)
 
         # 名称筛选输入框
-        ttk.Label(filter_frame, text="名称包含:").pack(side=tk.LEFT)
-        self.filter_entry = ttk.Entry(filter_frame, textvariable=self.filter_name)
-        self.filter_entry.pack(side=tk.LEFT, padx=(5, 10))
+        ttk.Label(filter_frame, text="名称包含:", font=self.header_font).pack(
+            side=tk.LEFT
+        )
+        self.filter_entry = ttk.Entry(
+            filter_frame,
+            textvariable=self.filter_name,
+            font=self.default_font,
+            width=20,
+        )
+        self.filter_entry.pack(side=tk.LEFT, padx=(10, 20))
 
         # 只显示有名称的设备复选框
         self.named_only_check = ttk.Checkbutton(
-            filter_frame, text="只显示有名字的设备", variable=self.show_only_named
+            filter_frame,
+            text="只显示有名字的设备",
+            variable=self.show_only_named,
+            style="Large.TCheckbutton",
         )
         self.named_only_check.pack(side=tk.LEFT)
 
         # 设备列表框架
-        devices_frame = ttk.LabelFrame(self.root, text="附近蓝牙设备", padding=(10, 5))
-        devices_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        devices_frame = ttk.LabelFrame(self.root, text="附近蓝牙设备", padding=(20, 10))
+        devices_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
 
         # 创建表格
         columns = ("name", "address", "rssi")
-        self.tree = ttk.Treeview(devices_frame, columns=columns, show="headings")
+        self.tree = ttk.Treeview(
+            devices_frame, columns=columns, show="headings", style="Large.Treeview"
+        )
         self.tree.heading(
             "name", text="名称", command=lambda: self.sort_column_by("name")
         )
@@ -100,9 +155,9 @@ class BLEScannerApp:
         self.tree.heading(
             "rssi", text="信号强度", command=lambda: self.sort_column_by("rssi")
         )
-        self.tree.column("name", width=250)
-        self.tree.column("address", width=150)
-        self.tree.column("rssi", width=100)
+        self.tree.column("name", width=500, anchor=tk.W)
+        self.tree.column("address", width=300, anchor=tk.CENTER)
+        self.tree.column("rssi", width=200, anchor=tk.CENTER)
 
         # 添加滚动条
         scrollbar = ttk.Scrollbar(
@@ -118,8 +173,29 @@ class BLEScannerApp:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
         # 底部信息
-        self.info_label = ttk.Label(self.root, text="就绪", foreground="gray")
-        self.info_label.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=5)
+        self.info_label = tk.Label(
+            self.root, text="就绪", foreground="gray", font=self.header_font
+        )
+        self.info_label.pack(side=tk.BOTTOM, fill=tk.X, padx=20, pady=10)
+
+        # 配置样式
+        self.setup_styles()
+
+    def setup_styles(self):
+        """设置界面样式"""
+        style = ttk.Style()
+
+        # 配置按钮样式
+        style.configure("Large.TButton", font=self.default_font, padding=10)
+
+        # 配置复选框样式
+        style.configure("Large.TCheckbutton", font=self.default_font, padding=5)
+
+        # 配置树形视图样式
+        style.configure("Large.Treeview", font=self.tree_font, rowheight=30)
+        style.configure(
+            "Large.Treeview.Heading", font=self.tree_heading_font
+        )  # 使用普通字体而不是加粗字体
 
     def on_device_select(self, event):
         """设备被选中时的回调函数"""
@@ -257,7 +333,7 @@ class BLEScannerApp:
         """
         更新状态显示
         """
-        self.status_label.config(text=f"状态: {self.ble_status}")
+        self.status_label.config(text=f"蓝牙状态: {self.ble_status}")
 
         # 根据状态改变颜色
         if self.ble_status == "不支持蓝牙":
